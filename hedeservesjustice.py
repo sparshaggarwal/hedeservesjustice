@@ -1,122 +1,152 @@
-# generate_hedeservesjustice_templates_fixed.py
-# Fixed: use prs.slide_width/slide_height; pass prs into helper functions.
+#!/usr/bin/env python3
 
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
-from pptx.dml.color import RGBColor
-from pptx.enum.dml import MSO_LINE
-from pptx.enum.shapes import MSO_SHAPE
+DAY_NUM = 9
+DAY_DESC = 'Day 9: Movie Theater'
 
-EMU_PER_INCH = 914400
+def is_pt_on_seg(px, py, x1, y1, x2, y2):
+    cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+    if abs(cross) > 0:
+        return False
+    if px < min(x1, x2) or px > max(x1, x2):
+        return False
+    if py < min(y1, y2) or py > max(y1, y2):
+        return False
+    return True
 
-def set_slide_size(prs, w_in, h_in):
-    prs.slide_width = int(w_in * EMU_PER_INCH)
-    prs.slide_height = int(h_in * EMU_PER_INCH)
+def is_pt_in_poly(px, py, poly):
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i].tuple
+        x2, y2 = poly[(i + 1) % n].tuple
+        if is_pt_on_seg(px, py, x1, y1, x2, y2):
+            return True
+        if ((y1 > py) != (y2 > py)):
+            x_intersect = (x2 - x1) * (py - y1) / (y2 - y1) + x1
+            if px < x_intersect:
+                inside = not inside
+    return inside
 
-def add_textbox(slide, left_in, top_in, width_in, height_in, text, font_size=32, bold=False, color=(0,0,0), align="left"):
-    box = slide.shapes.add_textbox(int(left_in*EMU_PER_INCH), int(top_in*EMU_PER_INCH),
-                                   int(width_in*EMU_PER_INCH), int(height_in*EMU_PER_INCH))
-    tf = box.text_frame
-    tf.clear()
-    p = tf.paragraphs[0]
-    run = p.add_run()
-    run.text = text
-    font = run.font
-    font.size = Pt(font_size)
-    font.bold = bold
-    font.color.rgb = RGBColor(*color)
-    p.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[align]
-    return box
+def get_orient(ax, ay, bx, by, cx, cy):
+    v = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+    if v > 0:
+        return 1
+    if v < 0:
+        return -1
+    return 0
 
-def add_safe_zone_guides(slide, prs, mode, margin_ratio=0.0556):
-    # Use presentation-wide size in EMU
-    w = prs.slide_width
-    h = prs.slide_height
-    mx = int(w * margin_ratio)
-    my = int(h * margin_ratio)
-    rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, mx, my, w - 2*mx, h - 2*my)
-    rect.fill.background()
-    rect.line.color.rgb = RGBColor(200,200,200)
-    rect.line.width = Pt(2)
-    rect.line.dash_style = MSO_LINE.DASH
+def get_seg_inter(a1, a2, b1, b2):
+    x1, y1 = a1
+    x2, y2 = a2
+    x3, y3 = b1
+    x4, y4 = b2
+    o1 = get_orient(x1, y1, x2, y2, x3, y3)
+    o2 = get_orient(x1, y1, x2, y2, x4, y4)
+    o3 = get_orient(x3, y3, x4, y4, x1, y1)
+    o4 = get_orient(x3, y3, x4, y4, x2, y2)
+    return o1 * o2 < 0 and o3 * o4 < 0
 
-    if mode == "9x16":
-        reels_h = int(h * 0.75)
-        reels_top = int((h - reels_h) / 2)
-        r2 = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, mx, reels_top, w - 2*mx, reels_h)
-        r2.fill.background()
-        r2.line.color.rgb = RGBColor(255,0,0)
-        r2.line.width = Pt(2)
-        r2.line.dash_style = MSO_LINE.DASH
+def rect_in_poly(x1, x2, y1, y2, points):
+    for cx, cy in [(x1, y1),(x1, y2),(x2, y1),(x2, y2)]:
+        if not is_pt_in_poly(cx, cy, points):
+            return False
+    n = len(points)
+    for e1 in [((x1, y1), (x2, y1)), ((x2, y1), (x2, y2)), ((x2, y2), (x1, y2)),((x1, y2), (x1, y1))]:
+        for i in range(n):
+            e2 = ((points[i].x, points[i].y), (points[(i + 1) % n].x, points[(i + 1) % n].y))
+            if get_seg_inter(e1[0], e1[1], e2[0], e2[1]):
+                return False
+    return True
 
-        stories_h = int(h * 0.8385)
-        stories_top = int((h - stories_h) / 2)
-        r3 = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, mx, stories_top, w - 2*mx, stories_h)
-        r3.fill.background()
-        r3.line.color.rgb = RGBColor(0,128,255)
-        r3.line.width = Pt(2)
-        r3.line.dash_style = MSO_LINE.DASH
+def check_line(x1, y1, x2, y2, pt1, pt2):
+    if pt1.x == pt2.x:
+        if pt1.x < x1 or pt1.x > x2:
+            return True
+        line_min_y, line_max_y = min(pt1.y, pt2.y), max(pt1.y, pt2.y)
+        if line_min_y < y1 or line_max_y > y2:
+            return True
+        if (pt1.x == x1 or pt1.x == x2) and line_min_y >= y1 and line_max_y <= y2:
+            return True
+    else:
+        if pt1.y < y1 or pt1.y > y2:
+            return True
+        line_min_x, line_max_x = min(pt1.x, pt2.x), max(pt1.x, pt2.x)
+        if line_min_x < x1 or line_max_x > x2:
+            return True
+        if (pt1.y == y1 or pt1.y == y2) and line_min_x >= x1 and line_max_x <= x2:
+            return True
+    
+    return False
 
-def add_brand_footer(slide, prs, handle="@hedeservesjustice"):
-    w_in = prs.slide_width / EMU_PER_INCH
-    h_in = prs.slide_height / EMU_PER_INCH
-    add_textbox(slide, w_in - 3.9, h_in - 0.8, 3.5, 0.5, handle, font_size=16, bold=True, color=(30,30,30), align="right")
+def calc(log, values, mode):
+    from itertools import combinations
+    from grid import Grid, Point
 
-def add_title_punch(slide, prs, mode):
-    add_safe_zone_guides(slide, prs, mode)
-    add_textbox(slide, 0.7, 1.0, 7.5, 1.2, "Headline (≤ 8 words)", font_size=56, bold=True)
-    add_textbox(slide, 0.7, 2.4, 7.5, 1.0, "Subhead (1 line)", font_size=28)
-    add_textbox(slide, 0.7, 3.6, 7.5, 2.5, "Body: 2–4 short bullets, large mobile-friendly text.", font_size=24)
-    add_brand_footer(slide, prs)
+    to_check = []
+    for row in values:
+        x, y = [int(i) for i in row.split(",")]
+        # grid[x, y] = "#"
+        to_check.append(Point(x, y))
+    
+    # if mode == 2:
+    #     edges = []
+    #     for i in range(len(to_check)):
+    #         edges.append((to_check[i], to_check[(i + 1) % len(to_check)]))
 
-def add_myth_fact(slide, prs, mode):
-    add_safe_zone_guides(slide, prs, mode)
-    add_textbox(slide, 0.7, 0.9, 7.5, 0.8, "Myth:", font_size=36, bold=True, color=(180,0,0))
-    add_textbox(slide, 0.7, 1.6, 7.5, 2.4, "Write the misconception in plain language.")
-    add_textbox(slide, 0.7, 4.3, 7.5, 0.8, "Fact:", font_size=36, bold=True, color=(0,120,0))
-    add_textbox(slide, 0.7, 5.0, 7.5, 2.4, "Write the verified fact and cite law or source.")
-    add_brand_footer(slide, prs)
+    best = 0
+    for a, b in combinations(to_check, 2):
+        x1, x2 = min(a.x, b.x), max(a.x, b.x)
+        y1, y2 = min(a.y, b.y), max(a.y, b.y)
 
-def add_rights_remedies(slide, prs, mode):
-    add_safe_zone_guides(slide, prs, mode)
-    add_textbox(slide, 0.7, 0.9, 7.5, 1.0, "Rights & Remedies", font_size=40, bold=True)
-    add_textbox(slide, 0.9, 2.0, 7.2, 3.8, "1) Step one (who/where)\n2) Step two (forms/fees)\n3) Step three (timelines)\n4) Step four (evidence)", font_size=28)
-    add_brand_footer(slide, prs)
+        if mode == 1:
+            for other in to_check:
+                hit = False
+                if x1 <= other.x <= x2 and y1 <= other.y <= y2:
+                    hit = True
+                    break
+                if not hit:
+                    area = (x2 - x1 + 1) * (y2 - y1 + 1)
+                    if area > best:
+                        best = area
+        elif mode == 2:
+            if rect_in_poly(x1, x2, y1, y2, to_check):
+                area = (x2 - x1 + 1) * (y2 - y1 + 1)
+                if area > best:
+                    best = area
 
-def add_case_snapshot(slide, prs, mode):
-    add_safe_zone_guides(slide, prs, mode)
-    add_textbox(slide, 0.7, 0.9, 7.5, 0.8, "Case snapshot", font_size=36, bold=True)
-    add_textbox(slide, 0.7, 1.9, 7.5, 1.4, "Issue:", font_size=30, bold=True)
-    add_textbox(slide, 0.7, 3.1, 7.5, 1.4, "What the law says:", font_size=30, bold=True)
-    add_textbox(slide, 0.7, 4.3, 7.5, 1.4, "Action to take:", font_size=30, bold=True)
-    add_brand_footer(slide, prs)
+    return best
 
-def add_cta(slide, prs, mode):
-    add_safe_zone_guides(slide, prs, mode)
-    add_textbox(slide, 0.7, 2.2, 7.5, 1.2, "Save • Share • Follow", font_size=48, bold=True, align="center")
-    add_textbox(slide, 1.2, 3.6, 6.5, 0.8, "Read more in caption • Not legal advice", font_size=24, align="center")
-    add_brand_footer(slide, prs)
+def test(log):
+    values = log.decode_values("""
+7,1
+11,1
+11,7
+9,7
+9,5
+2,5
+2,3
+7,3
+    """)
 
-def build(filename, mode):
-    prs = Presentation()
-    if mode == "4x5":
-        set_slide_size(prs, 8, 10)    # 4:5 portrait
-    elif mode == "1x1":
-        set_slide_size(prs, 10, 10)   # square
-    elif mode == "9x16":
-        set_slide_size(prs, 9, 16)    # story/reel
-    elif mode == "1x1.55":
-        set_slide_size(prs, 4.2, 6.51)  # ~1:1.55
+    log.test(calc(log, values, 1), '50')
+    log.test(calc(log, values, 2), '24')
 
-    blank = prs.slide_layouts[6]
-    for fn in (add_title_punch, add_myth_fact, add_rights_remedies, add_case_snapshot, add_cta):
-        slide = prs.slides.add_slide(blank)
-        fn(slide, prs, mode)
+def run(log, values):
+    log("Part 1")
+    log(calc(log, values, 1))
+    log("Part 2")
+    log(calc(log, values, 2))
 
-    prs.save(filename)
-
-build('hedeservesjustice_feed_4x5_template.pptx', '4x5')
-build('hedeservesjustice_square_1x1_template.pptx', '1x1')
-build('hedeservesjustice_story_reel_9x16_template.pptx', '9x16')
-build('hedeservesjustice_reel_cover_1x1_55_template.pptx', '1x1.55')
+if __name__ == "__main__":
+    import sys, os
+    def find_input_file():
+        for fn in sys.argv[1:] + ["input.txt", f"day_{DAY_NUM:0d}_input.txt", f"day_{DAY_NUM:02d}_input.txt"]:
+            for dn in ["", "Puzzles", "../Puzzles", "../../private/inputs/2024/Puzzles"]:
+                cur = os.path.join(*(dn.split("/") + [fn]))
+                if os.path.isfile(cur): return cur
+    fn = find_input_file()
+    if fn is None: print("Unable to find input file!\nSpecify filename on command line"); exit(1)
+    print(f"Using '{fn}' as input file:")
+    with open(fn) as f: values = [x.strip("\r\n") for x in f.readlines()]
+    print(f"Running day {DAY_DESC}:")
+    run(print, values)
